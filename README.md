@@ -1,4 +1,4 @@
-Cross-Platform Meta-Analyis
+Cross-Platform Meta-Analysis
 ===========================
 
 `crossmeta` streamlines the cross-platform meta-analysis of 
