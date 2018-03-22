@@ -35,6 +35,9 @@ setup_hline <- function (rawf) {
 
 
 fix_illum_headers <- function(elist_paths, eset = NULL) {
+    require(reader, quietly = TRUE)
+    require(data.table, quietly = TRUE)
+    require(Biobase, quietly = TRUE)
 
     annotation <- c()
     for (path in elist_paths) {
@@ -61,138 +64,187 @@ fix_illum_headers <- function(elist_paths, eset = NULL) {
         # save as will read from
         writeLines(rawf, fpath)
 
-        # fread first 1000 rows as example
-        ex <- data.table::fread(fpath, sep = '\t', skip = 0, header = TRUE, nrows = 1000, fill = TRUE)
+        # fread back in data
+        ex <- data.table::fread(fpath, sep = '\t', skip = 0, header = TRUE, fill = TRUE)
+        # ex <- data.table::fread(fpath, sep = '\t', skip = 0, header = TRUE, nrows = 1000, fill = TRUE)
         ex <- as.data.frame(ex)
 
-
-        # fix annotation columns ----
-
+        ## fix annotation columns ----
         # look for column with ILMN entries
         nilmn  <- apply(ex, 2, function(col) sum(grepl('ILMN_', col)))
         idcol  <- which(nilmn > 950)
 
         # fix if idcol is not ID_REF
         if (length(idcol) && names(idcol) != 'ID_REF') {
-
             # incase other column named ID_REF
             oldref <- which(names(ex) == 'ID_REF')
             if (length(oldref)) names(ex)[oldref] <- 'OLD_REF'
-
             names(ex)[idcol] <- 'ID_REF'
-            rawf[1] <- paste0(names(ex), collapse = '\t')
+            # rawf[1] <- paste0(names(ex), collapse = '\t')
         }
 
-        # remove any columns that start with V
-        ex[, grepl('^V\\d+$', colnames(ex))] <- NULL
-
-
+        # remove any columns that are not id, signal, or detection
+        # ex[, grepl('^V\\d+$', colnames(ex))] <- NULL
+        ex[,!grepl("*id_ref|*signal|*detection|*pval",tolower(names(ex)))] <- NULL
+        
         # identify other annotation columns
         isnum   <- unname(sapply(ex, is.numeric))
         isprobe <- unname(sapply(ex, function(col) is.integer(col) & min(col) > 10000))
         isnum   <- isnum & !isprobe
-
+        
+        # set id column to annotation list
         annotation <- c(annotation, names(ex)[!isnum])
 
         # rename Signal and Pvalue identifiers ----
         pcols <- which(grepl('pval|detection', colnames(ex), TRUE) & isnum)
         scols <- which(grepl('signal', colnames(ex), TRUE) & isnum)
-
+        
         # rename pvalue columns
         if (length(pcols)) {
-
-            # longest common prefix or suffix in pvalue columns
-            pcol_prefix <- Biobase::lcPrefix(colnames(ex)[pcols])
-            pcol_sufix  <- Biobase::lcSuffix(colnames(ex)[pcols])
-
-            if (grepl('pval|detection', pcol_prefix, TRUE)) {
-                colnames(ex)[pcols] <- gsub(pcol_prefix, '', colnames(ex)[pcols])
-                colnames(ex)[pcols] <- paste0('Detection-', colnames(ex)[pcols])
-
-                rawf[1] <- paste0(colnames(ex), collapse = '\t')
-
-            } else if (grepl('pval|detection', pcol_sufix, TRUE)) {
-                colnames(ex)[pcols] <- gsub(pcol_sufix, '', colnames(ex)[pcols])
-                colnames(ex)[pcols] <- paste0('Detection-', colnames(ex)[pcols])
-
-                rawf[1] <- paste0(colnames(ex), collapse = '\t')
-            }
+          
+          # longest common prefix or suffix in pvalue columns
+          pcol_prefix <- Biobase::lcPrefix(colnames(ex)[pcols])
+          pcol_sufix  <- Biobase::lcSuffix(colnames(ex)[pcols])
+          
+          if (grepl('pval|detection', pcol_prefix, TRUE)) {
+            colnames(ex)[pcols] <- gsub(pcol_prefix, '', colnames(ex)[pcols])
+            colnames(ex)[pcols] <- paste0('Detection-', colnames(ex)[pcols])
+          } else if (grepl('pval|detection', pcol_sufix, TRUE)) {
+            colnames(ex)[pcols] <- gsub(pcol_sufix, '', colnames(ex)[pcols])
+            colnames(ex)[pcols] <- paste0('Detection-', colnames(ex)[pcols])
+          }
         }
-
+        
         # rename signal columns
         if (length(scols)) {
-
-            # longest common prefix or suffix in pvalue columns
-            scol_prefix <- Biobase::lcPrefix(colnames(ex)[scols])
-            scol_sufix  <- Biobase::lcSuffix(colnames(ex)[scols])
-
-            if (grepl('signal', scol_prefix, TRUE)) {
-                colnames(ex)[scols] <- gsub(scol_prefix, '', colnames(ex)[scols])
-                colnames(ex)[scols] <- paste0('AVG_Signal-', colnames(ex)[scols])
-
-                rawf[1] <- paste0(colnames(ex), collapse = '\t')
-
-            } else if (grepl('signal', scol_sufix, TRUE)) {
-                colnames(ex)[scols] <- gsub(scol_sufix, '', colnames(ex)[scols])
-                colnames(ex)[scols] <- paste0('AVG_Signal-', colnames(ex)[scols])
-
-                rawf[1] <- paste0(colnames(ex), collapse = '\t')
-            }
-        }
-
-
-        # if Pvalue every second column, set Signal to every first ----
-        if (!length(pcols))
-            pcols <- unname(which(sapply(ex, function(col) ifelse(is.numeric(col), max(col) < 1.01, FALSE))))
-
-        if (length(pcols))
-            p2nd <- isTRUE(all.equal(seq(min(pcols), max(pcols), 2), pcols))
-
-        if (length(pcols) && p2nd) {
-            # make Signal columns to left of Pvalue columns
-            # (if couldn't detect)
-            if (!length(scols) || length(scols) != length(pcols))
-                scols <- pcols-1
-
-            # use Signal column for sample names
-            sample_names <- gsub('AVG_Signal-', '', colnames(ex)[scols])
-
-            colnames(ex)[scols] <- paste0('AVG_Signal-', sample_names)
-            colnames(ex)[pcols] <- paste0('Detection-', sample_names)
-
-            rawf[1] <- paste(colnames(ex), collapse = '\t')
-        }
-
-        # if num numeric columns is twice num pcols or scols, set unidentified ----
-        if (!length(pcols) && length(scols)*2 == sum(isnum)) {
-            pcols <- setdiff(which(isnum), scols)
-            colnames(ex)[pcols] <- paste0('Detection-', colnames(ex)[pcols])
-            rawf[1] <- paste0(colnames(ex), collapse = '\t')
-        }
-
-        if (!length(scols) && length(pcols)*2 == sum(isnum)) {
-            scols <- setdiff(which(isnum), pcols)
+          
+          # longest common prefix or suffix in pvalue columns
+          scol_prefix <- Biobase::lcPrefix(colnames(ex)[scols])
+          scol_sufix  <- Biobase::lcSuffix(colnames(ex)[scols])
+          
+          if (grepl('signal', scol_prefix, TRUE)) {
+            colnames(ex)[scols] <- gsub(scol_prefix, '', colnames(ex)[scols])
             colnames(ex)[scols] <- paste0('AVG_Signal-', colnames(ex)[scols])
-            rawf[1] <- paste0(colnames(ex), collapse = '\t')
+          } else if (grepl('signal', scol_sufix, TRUE)) {
+            colnames(ex)[scols] <- gsub(scol_sufix, '', colnames(ex)[scols])
+            colnames(ex)[scols] <- paste0('AVG_Signal-', colnames(ex)[scols])
+          }
         }
-
-
-        # if num numeric columns is n samples, set Signal to numeric columns ----
-
-        if (!is.null(eset)) {
-            nsamp <- ncol(eset)
-
-            if (sum(isnum) == nsamp) {
-                # add Signal identifier to all numeric columns
-                colnames(ex)[isnum] <- gsub('AVG_Signal-', '', colnames(ex)[isnum])
-                colnames(ex)[isnum] <- paste0('AVG_Signal-', colnames(ex)[isnum])
-
-                rawf[1] <- paste0(colnames(ex), collapse = '\t')
-            }
+        
+        # check to see if columns need to be re-ordered
+        if (length(pcols))
+          p2nd <- isTRUE(all.equal(seq(min(pcols), max(pcols), 2), pcols))
+        
+        if (length(pcols) && p2nd) {
+          # make Signal columns to left of Pvalue columns
+          if (!length(scols) || length(scols) != length(pcols))
+            scols <- pcols-1
         }
+        
+        # write updated data to disc
+        write.table(ex, fpath, sep = "\t", quote = FALSE)
+        
+        # # identify other annotation columns
+        # isnum   <- unname(sapply(ex, is.numeric))
+        # isprobe <- unname(sapply(ex, function(col) is.integer(col) & min(col) > 10000))
+        # isnum   <- isnum & !isprobe
+        # 
+        # # set id column to annotation list
+        # annotation <- c(annotation, names(ex)[!isnum])
+        # 
+        # # rename Signal and Pvalue identifiers ----
+        # pcols <- which(grepl('pval|detection', colnames(ex), TRUE) & isnum)
+        # scols <- which(grepl('signal', colnames(ex), TRUE) & isnum)
+        # 
+        # # rename pvalue columns
+        # if (length(pcols)) {
+        # 
+        #     # longest common prefix or suffix in pvalue columns
+        #     pcol_prefix <- Biobase::lcPrefix(colnames(ex)[pcols])
+        #     pcol_sufix  <- Biobase::lcSuffix(colnames(ex)[pcols])
+        # 
+        #     if (grepl('pval|detection', pcol_prefix, TRUE)) {
+        #         colnames(ex)[pcols] <- gsub(pcol_prefix, '', colnames(ex)[pcols])
+        #         colnames(ex)[pcols] <- paste0('Detection-', colnames(ex)[pcols])
+        #         # rawf[1] <- paste0(colnames(ex), collapse = '\t')
+        # 
+        #     } else if (grepl('pval|detection', pcol_sufix, TRUE)) {
+        #         colnames(ex)[pcols] <- gsub(pcol_sufix, '', colnames(ex)[pcols])
+        #         colnames(ex)[pcols] <- paste0('Detection-', colnames(ex)[pcols])
+        #         # rawf[1] <- paste0(colnames(ex), collapse = '\t')
+        #     }
+        # }
+        # 
+        # # rename signal columns
+        # if (length(scols)) {
+        # 
+        #     # longest common prefix or suffix in pvalue columns
+        #     scol_prefix <- Biobase::lcPrefix(colnames(ex)[scols])
+        #     scol_sufix  <- Biobase::lcSuffix(colnames(ex)[scols])
+        # 
+        #     if (grepl('signal', scol_prefix, TRUE)) {
+        #         colnames(ex)[scols] <- gsub(scol_prefix, '', colnames(ex)[scols])
+        #         colnames(ex)[scols] <- paste0('AVG_Signal-', colnames(ex)[scols])
+        #         # rawf[1] <- paste0(colnames(ex), collapse = '\t')
+        # 
+        #     } else if (grepl('signal', scol_sufix, TRUE)) {
+        #         colnames(ex)[scols] <- gsub(scol_sufix, '', colnames(ex)[scols])
+        #         colnames(ex)[scols] <- paste0('AVG_Signal-', colnames(ex)[scols])
+        #         # rawf[1] <- paste0(colnames(ex), collapse = '\t')
+        #     }
+        # }
 
-        writeLines(rawf, fpath)
-    }
-    if (!length(annotation) || identical(annotation, 'ID_REF')) annotation = c("TargetID", "SYMBOL", "ID_REF")
+        # # if Pvalue every second column, set Signal to every first ----
+        # if (!length(pcols)) #is this ever true?
+        #     pcols <- unname(which(sapply(ex, function(col) ifelse(is.numeric(col), max(col) < 1.01, FALSE))))
+        # 
+        # if (length(pcols))
+        #     p2nd <- isTRUE(all.equal(seq(min(pcols), max(pcols), 2), pcols))
+        # 
+        # if (length(pcols) && p2nd) {
+        #     # make Signal columns to left of Pvalue columns
+        #     if (!length(scols) || length(scols) != length(pcols))
+        #         scols <- pcols-1
+
+            # # use Signal column for sample names
+            # sample_names <- gsub('AVG_Signal-', '', colnames(ex)[scols])
+        # 
+        #     colnames(ex)[scols] <- paste0('AVG_Signal-', sample_names)
+        #     colnames(ex)[pcols] <- paste0('Detection-', sample_names)
+        # 
+        #     rawf[1] <- paste(colnames(ex), collapse = '\t')
+        # }
+
+        # # if num numeric columns is twice num pcols or scols, set unidentified ----
+        # if (!length(pcols) && length(scols)*2 == sum(isnum)) {
+        #     pcols <- setdiff(which(isnum), scols)
+        #     colnames(ex)[pcols] <- paste0('Detection-', colnames(ex)[pcols])
+        #     rawf[1] <- paste0(colnames(ex), collapse = '\t')
+        # }
+        # 
+        # if (!length(scols) && length(pcols)*2 == sum(isnum)) {
+        #     scols <- setdiff(which(isnum), pcols)
+        #     colnames(ex)[scols] <- paste0('AVG_Signal-', colnames(ex)[scols])
+        #     rawf[1] <- paste0(colnames(ex), collapse = '\t')
+        # }
+        # 
+        # # if num numeric columns is n samples, set Signal to numeric columns ----
+        # if (!is.null(eset)) {
+        #     nsamp <- ncol(eset)
+        # 
+        #     if (length(nsamp) >0 && sum(isnum) == nsamp) {
+        #         # add Signal identifier to all numeric columns
+        #         colnames(ex)[isnum] <- gsub('AVG_Signal-', '', colnames(ex)[isnum])
+        #         colnames(ex)[isnum] <- paste0('AVG_Signal-', colnames(ex)[isnum])
+        # 
+        #         rawf[1] <- paste0(colnames(ex), collapse = '\t')
+        #     }
+        # }
+
+        # writeLines(rawf, fpath)
+        
+    # }
+    # if (!length(annotation) || identical(annotation, 'ID_REF')) annotation = c("TargetID", "SYMBOL", "ID_REF")
     return(annotation)
+    }
 }
