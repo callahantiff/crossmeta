@@ -1,3 +1,13 @@
+#########################################################################################
+### load_illum - modified code from crossmeta that loads and processes illumina data
+### version 1.0.0
+### date: 03.20.18
+#########################################################################################
+
+# load needed scripts, can remove this again once we have packaged the code
+source("~/Dropbox/GraduateSchool/PhD/LabWork/MetaOmic/transcriptomic/R/crossmeta/R/illum_headers.R")
+
+# ----
 # Load and pre-process raw Illum files.
 #
 # Load raw txt files previously downloaded with \code{get_raw} and checked
@@ -15,52 +25,58 @@
 # @return List of annotated esets.
 
 load_illum <- function (gse_names, data_dir, gpl_dir, ensql) {
-
     esets  <- list()
     errors <- c()
+    
     for (gse_name in gse_names) {
-
+      cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Processing ILLUMINA:", gse_name, strrep("#", 5), "\n")
         gse_dir <- file.path(data_dir, gse_name)
         save_name <- paste(gse_name, "eset.rds", sep = "_")
-
 
         # get GSEMatrix (for pheno dat)
         eset <- NULL
         while (is.null(eset)) {
-            eset <- try(crossmeta:::getGEO(gse_name, destdir = gse_dir, GSEMatrix = TRUE, getGPL = FALSE))
+          eset <- try(suppressWarnings(getGEO(gse_name, destdir = gse_dir, GSEMatrix = TRUE, getGPL = FALSE)))
         }
-
-        if (length(eset) > 1) {
-            warning("Multi-platform Illumina GSEs not supported. ", gse_name)
-            errors <- c(errors, gse_name)
-            next
-        }
-
+        
         # check if have GPL
+        cat(strrep("#", 5), "Downloading Annotation Files", strrep("#", 5), "\n")
         gpl_names <- paste0(sapply(eset, annotation), '.soft', collapse = "|")
         gpl_paths <- sapply(gpl_names, function(gpl_name) {
-            list.files(gpl_dir, gpl_name, full.names = TRUE, recursive = TRUE, include.dirs = TRUE)[1]
+          list.files(gpl_dir, gpl_name, full.names = TRUE, recursive = TRUE, include.dirs = TRUE)[1]
         })
-
+        
         # copy over GPL
-        if (length(gpl_paths) > 0)
-            file.copy(gpl_paths, gse_dir)
-
-        # will use local GPL or download if couldn't copy
-        eset <- NULL
-        while (is.null(eset)) {
-            eset <- try(crossmeta:::getGEO(gse_name, destdir = gse_dir, GSEMatrix = TRUE))
+        if (length(gpl_paths) > 0) file.copy(gpl_paths, gse_dir)
+        
+        # if (length(eset) > 1) {
+        #     warning("Multi-platform Illumina GSEs not supported. ", gse_name)
+        #     errors <- c(errors, gse_name)
+        #     next
+        # }
+        
+        # name esets
+        if (length(eset) > 1) {
+          names(eset) <- paste(gse_name, sapply(eset, annotation), sep = '.')
+        } else {
+          names(eset) <- gse_name
         }
-        eset <- tryCatch(load_illum_plat(eset[[1]], gse_name, gse_dir, ensql),
-                         error = function(e) NULL)
-
+        
+        # load eset for each platform in GSE
+        eset <- lapply(eset, function(set) {
+          cat(strrep("#", 5), "Loading Expression Data", strrep("#", 5), "\n")
+          tryCatch(
+            load_illum_plat(set, gse_dir, gse_name, ensql),
+            error = function(e)
+              NULL)
+        })
+        
         # save to disc
         if (!is.null(eset)) {
             saveRDS(eset, file.path(gse_dir, save_name))
         } else {
             errors <- c(errors, gse_name)
         }
-
         esets[[gse_name]] <- eset
     }
     eset_names <- get_eset_names(esets, gse_names)
@@ -69,9 +85,11 @@ load_illum <- function (gse_names, data_dir, gpl_dir, ensql) {
     return (list(esets = esets, errors = errors))
 }
 
-# -------------------
 
 # Helper utility for load_illum.
+#
+# This function loads the data, merges the expression data features with Elist of expression data,
+# verifies log transformation, and performs RMA background correction and quantile normalization
 #
 # Used by load_illum to load an eset.
 #
@@ -82,20 +100,31 @@ load_illum <- function (gse_names, data_dir, gpl_dir, ensql) {
 # @seealso \code{\link{load_illum}}.
 # @return Annotated eset.
 
-load_illum_plat <- function(eset, gse_name, gse_dir, ensql) {
+# ----
+load_illum_plat <- function(eset, gse_dir, gse_name, ensql) {
+    require(Biobase, quietly = TRUE)
+    require(limma, quietly = TRUE)
 
-    try(fData(eset)[fData(eset) == ""] <- NA)
-    try(fData(eset)[] <- lapply(fData(eset), as.character))
+    # try(Biobase::fData(eset)[Biobase::fData(eset) == ""] <- NA)
+    try(Biobase::fData(eset)[] <- lapply(Biobase::fData(eset), as.character))
 
     # fix header issues
     elist_paths <- list.files(gse_dir, pattern = "non.*norm.*txt$|raw.*txt$|nonorm.*txt$", full.names = TRUE, ignore.case = TRUE)
-    elist_paths <- elist_paths[!grepl('fixed[.]txt$', elist_paths)]
-    annotation  <- fix_illum_headers(elist_paths, eset)
+    
+    # for multiplatform arrays
+    if (length(elist_paths[!grepl('fixed[.]txt$', elist_paths)]) > 1) {
+      elist_paths <- elist_paths[!grepl('fixed[.]txt$', elist_paths)]
+      elist_paths <- elist_paths[grepl(as.character(Biobase::pData(eset)$description[[1]]), tolower(elist_paths))]
+      annotation  <- fix_illum_headers(elist_paths, eset)
+    }
+    else {
+      elist_paths <- elist_paths[!grepl('fixed[.]txt$', elist_paths)]
+      annotation  <- fix_illum_headers(elist_paths, eset)
+    }
 
     # load fixed elist paths
     elist_paths <- gsub(".txt", "_fixed.txt", elist_paths, fixed = TRUE)
     elist <- limma::read.ilmn(elist_paths, probeid = "ID_REF", annotation = annotation)
-
 
     # don't correct if already log transformed (already corrected?)
     logd <- max(elist$E, na.rm = TRUE) < 100
@@ -104,17 +133,14 @@ load_illum_plat <- function(eset, gse_name, gse_dir, ensql) {
             limma::neqc(elist),
             error = function(c) {
                 # PMID:19068485 recommends mle and offset 50
-                elist <- limma::backgroundCorrect(elist, method = "normexp",
-                                                 normexp.method = "mle",
-                                                 offset = 50)
-
+                # elist <- limma::backgroundCorrect(elist, method = "normexp", normexp.method = "mle", offset = 50)
+                elist <- limma::backgroundCorrect(elist, method = "normexp", normexp.method = "rma")
                 return(limma::normalizeBetweenArrays(elist, method = "quantile"))
             })
     }
 
     # merge eset and elist fdata
     elist <- merge_elist(eset, elist)
-
     if ('ID_REF' %in% colnames(elist$genes)) {
         row.names(elist$E) <- row.names(elist$genes) <- make.unique(elist$genes$ID_REF)
     } else {
@@ -128,49 +154,50 @@ load_illum_plat <- function(eset, gse_name, gse_dir, ensql) {
     warn  <- res$warn
 
     # keep gse matrix and raw elist title
-    pData(eset)$title.gsemat <- pData(eset)$title
-    pData(eset)$title.raw    <- colnames(elist)
-
+    Biobase::pData(eset)$title.gsemat   <- Biobase::pData(eset)$title
+    Biobase::pData(eset)$title.raw      <- colnames(elist)
 
     if (warn) {
         # use raw elist titles to ensure correct contrasts
-        pData(eset)$title <- colnames(elist)
+        Biobase::pData(eset)$title <- colnames(elist)
 
         # add illum colname to warn about pData
-        pData(eset)$illum <- NA
+        Biobase::pData(eset)$illum <- NA
     }
-    colnames(elist) <- sampleNames(eset)
+    colnames(elist) <- Biobase::sampleNames(eset)
 
     # transfer elist to eset
-    eset <- ExpressionSet(elist$E,
-                          phenoData = phenoData(eset),
+    eset <- Biobase::ExpressionSet(elist$E,
+                          phenoData = Biobase::phenoData(eset),
                           featureData = as(elist$genes, 'AnnotatedDataFrame'),
-                          annotation = annotation(eset))
+                          annotation = Biobase::annotation(eset))
 
     # add SYMBOL annotation
     eset <- symbol_annot(eset, gse_name, ensql)
     return(eset)
 }
 
-
 # -------------------
 
-# like base pmatch
-# partial match occurs if the whole of the element of x matches any part of the element of table
 fuzzy_pmatch <- function(x, table) {
-    x <- tolower(x)
-    table <- tolower(table)
+  # like base pmatch
+  # partial match occurs if the whole of the element of x matches any part of the element of table
+    x1 <- gsub( " |[[:punct:]]+", "", as.character(tolower(x)))
+    table1 <- gsub( " |[[:punct:]]+", "", as.character(tolower(table)))
 
     # first look for perfect matches
-    perfect <- match(x, table)
+    perfect <- match(x1, table1)
 
     # is every x has a perfect match in table, return
-    if (sum(is.na(perfect)) == 0) return(perfect)
+    if (sum(is.na(perfect)) == 0) {
+      # table = x
+      return(perfect)
+    }
 
     # otherwise first grep
-    tomatch <- x[is.na(perfect)]
+    tomatch <- x1[is.na(perfect)]
     gmatch  <- sapply(tomatch, function(val) {
-        res <- grep(val, table, fixed = TRUE)[1]
+        res <- grep(val, table1, fixed = TRUE)[1]
         if (!length(res)) return(NA_integer_)
         return(res)
     })
@@ -180,19 +207,22 @@ fuzzy_pmatch <- function(x, table) {
     return(perfect)
 }
 
+# ----
 match_samples <- function(eset, elist) {
-
+  # function ensures that the same identifers for samples are used with eset and elist
+    require(Biobase, quietly = TRUE)
+    require(ccmap, quietly = TRUE)
+  
     # determine if elist has fewer samples
     data_fewer <- ncol(elist) < ncol(eset)
 
-    # check if colnames match ----
+    # check if colnames match
     if (data_fewer) {
         # check if all elist colnames in eset colnames
         if (all(colnames(elist) %in% colnames(eset))) {
             cat('Illumina samples matched by column names.\n')
             return(list(elist_order = colnames(elist), eset_order = colnames(elist), warn = FALSE))
         }
-
     } else {
         # check if all eset colnames in elist colnames
         if (all(colnames(eset) %in% colnames(elist))) {
@@ -201,12 +231,10 @@ match_samples <- function(eset, elist) {
         }
     }
 
-    # check if eset pdata col matches elist colnames ----
-
+    # check if eset pdata col matches elist colnames
     if (!is.null(colnames(elist))) {
-
         # matrix of positions of matches for elist colnames among those for each pdata column
-        matches <- sapply(pData(eset), function(col) {
+        matches <- sapply(Biobase::pData(eset), function(col) {
             fuzzy_pmatch(colnames(elist), col)
         })
 
@@ -232,26 +260,23 @@ match_samples <- function(eset, elist) {
         }
     }
 
+    # ----
     # check if similarity offers unique match ----
-
-
     # make sure eset is log2 transformed
-    logd <- max(exprs(eset), na.rm = TRUE) < 1000
+    logd <- max(Biobase::exprs(eset), na.rm = TRUE) < 1000
     if (!logd) {
-        exprs(eset) <- log2(exprs(eset) + abs(min(exprs(eset), na.rm = TRUE)) + 16)
+      Biobase::exprs(eset) <- log2(Biobase::exprs(eset) + abs(min(Biobase::exprs(eset), na.rm = TRUE)) + 16)
     }
 
     # row names are the best match columns for elist and eset
-    elist <- elist[!is.na(elist$genes[[elist$elistcol]]), ]
-    row.names(elist) <- make.unique(elist$genes[[elist$elistcol]])
-
-    eset <- eset[!is.na(fData(eset)[[elist$esetcol]]), ]
-    row.names(eset)  <- make.unique(fData(eset)[[elist$esetcol]])
+    elist <- elist[!is.na(elist$genes[[1]]), ]
+    row.names(elist) <- make.unique(elist$genes[[1]])
+    # eset2 <- eset[!is.na(Biobase::fData(eset)), ]
+    row.names(eset) <- make.unique(row.names(Biobase::fData(eset)))
 
     # only include rows without missing values
-    eset   <- eset[complete.cases(exprs(eset)), ]
+    eset   <- eset[complete.cases(Biobase::exprs(eset)), ]
     elist  <- elist[complete.cases(elist$E), ]
-
     qres   <- list()
     ngenes <- min(nrow(eset), nrow(elist))
 
@@ -265,7 +290,7 @@ match_samples <- function(eset, elist) {
     } else {
         # determine most similar elist sample for each sample in eset
         for (i in 1:ncol(eset)) {
-            qsamp <- exprs(eset)[, i]
+            qsamp <- Biobase::exprs(eset)[, i]
             qres[[colnames(eset)[i]]] <- ccmap::query_drugs(qsamp, elist$E, sorted = FALSE, ngenes = ngenes)
         }
     }
@@ -291,8 +316,8 @@ match_samples <- function(eset, elist) {
         # look for misses in non-first query results
         dups   <- unique(best[duplicated(best)])
         misses <- setdiff(1:nrow(qres), unique(best))
-
         n <- nrow(qres)
+        
         for (dup in dups) {
             # query results for duplicate
             i <- 1
@@ -343,51 +368,54 @@ match_samples <- function(eset, elist) {
     }
 }
 
-
-
-
+# ----
 merge_elist <- function(eset, elist) {
+  # function checks if there is feature data that comes with eset and if there is, it merges the
+  # features by probe id with the elist data
+  
+    require(Biobase, quietly = TRUE)
 
     if (is.null(elist$genes)) stop('Raw elist lacks feature names.')
 
-    # get eset and elist fdata columns
-    esetcols  <- fData(eset)
+    # get eset and elist pdata columns
+    esetcols  <- Biobase::fData(eset)
     elistcols <- elist$genes
 
-
-    # find eset fData column that best matches elist features
-    best  <- c(esetcol=NA, elistcol=NA)
-    bestf <- 0
-
-    for (i in seq_along(elistcols)) {
-
+    # first, check if the eset has feature data (not all do)
+    if (ncol(esetcols) != 0) {
+      # find eset pdata column that best matches elist features
+      best  <- c(esetcol=NA, elistcol=NA)
+      bestf <- 0
+      
+      for (i in seq_along(elistcols)) {
         elistcol <- elistcols[[i]]
-
+        
         # get fraction of fdata column that has a match
         matches <- sapply(names(esetcols), function(esetcol) {
-            sum(elistcol %in% esetcols[, esetcol]) / length(elistcol)
+          sum(elistcol %in% esetcols[, esetcol]) / length(elistcol)
         })
-
+        
         # update best
         if (max(matches) >= bestf) {
-            bestf <- max(matches)
-            best['elistcol'] <- names(elistcols)[i]
-            best['esetcol']  <- names(matches[which.max(matches)])
+          bestf <- max(matches)
+          best['elistcol'] <- names(elistcols)[i]
+          best['esetcol']  <- names(matches[which.max(matches)])
         }
-    }
-
-    if (bestf > 0.3) {
+      }
+      
+      if (bestf > 0.3) {
         # merge eset and elist fdata columns
         esetcols  <- esetcols[!duplicated(esetcols[best['esetcol']]),, drop = FALSE]
         elistcols <- merge(elistcols, esetcols, all.x = TRUE, by.x = best['elistcol'], by.y = best['esetcol'], sort = FALSE)
         elistcols[elistcols == ""] <- NA
-
         elist$genes <- elistcols
-
+        
         # add best info for illumina sample matching
         elist$elistcol <- best[['elistcol']]
         elist$esetcol  <- best[['esetcol']]
+      }
     }
+    
     elist$genes[] <- lapply(elist$genes, as.character)
     return(elist)
 }
