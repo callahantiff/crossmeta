@@ -4,6 +4,7 @@
 ### date: 03.20.18
 #########################################################################################
 
+# ----
 # Extract scan date from Affymetrix CEL file.
 #
 # Useful for defining sample batches for \code{ComBat}. No longer
@@ -14,7 +15,7 @@
 # @return Factor vector of CEL scan dates.
 
 cel_dates <- function(cel_paths) {
-  require(affxparser)
+  require(affxparser, quietly = TRUE)
   
   scan_dates <- c()
   for (i in seq_along(cel_paths)) {
@@ -27,8 +28,7 @@ cel_dates <- function(cel_paths) {
 }
 
 
-# ------------------------
-
+# ----
 # Load and pre-process raw Affymetrix CEL files for multiple GSEs.
 #
 # Load raw CEL files previously downloaded with \code{get_raw_affy}. Used by
@@ -48,31 +48,21 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
   errors <- c()
   
   for (gse_name in gse_names) {
+    cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Processing AFFY:", gse_name, strrep("#", 5), "\n")
     gse_dir <- file.path(data_dir, gse_name)
     save_name <- paste(gse_name, "eset.rds", sep = "_")
     
     # get GSEMatrix (for pheno dat)
     eset <- NULL
     while (is.null(eset)) {
-      eset <-
-        try(getGEO(
-          gse_name,
-          destdir = gse_dir,
-          GSEMatrix = TRUE,
-          getGPL = FALSE
-        ))
+      eset <- try(suppressWarnings(getGEO(gse_name, destdir = gse_dir, GSEMatrix = TRUE, getGPL = FALSE)))
     }
     
     # check if have GPL
+    cat(strrep("#", 5), "Downloading Annotation Files", strrep("#", 5), "\n")
     gpl_names <- paste0(sapply(eset, annotation), '.soft', collapse = "|")
     gpl_paths <- sapply(gpl_names, function(gpl_name) {
-      list.files(
-        gpl_dir,
-        gpl_name,
-        full.names = TRUE,
-        recursive = TRUE,
-        include.dirs = TRUE
-      )[1]
+      list.files(gpl_dir, gpl_name, full.names = TRUE, recursive = TRUE, include.dirs = TRUE)[1]
     })
     
     # copy over GPL
@@ -93,21 +83,19 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
     
     # load eset for each platform in GSE
     eset <- lapply(eset, function(eset.gpl) {
+      cat(strrep("#", 5), "Loading Expression Data", strrep("#", 5), "\n")
       tryCatch(
         load_affy_plat(eset.gpl, gse_dir, gse_name, ensql),
         error = function(e)
-          NA
-      )
+          NA)
     })
     
     # save to disc
-    if (!all(is.na(eset)))
-      saveRDS(eset[!is.na(eset)], file.path(gse_dir, save_name))
+    if (!all(is.na(eset))) saveRDS(eset[!is.na(eset)], file.path(gse_dir, save_name))
     
     # if there are any NAs save information to error list
     if (anyNA(eset))
       errors <- c(errors, names(eset[is.na(eset)]))
-    
     if (!all(is.na(eset)))
       esets[[gse_name]] <- eset[!is.na(eset)]
   }
@@ -117,11 +105,11 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
   return (list(esets = esets, errors = errors))
 }
 
-
-# ------------------------
-
-
+# ----
 # Helper utility for load_affy.
+#
+# This function loads the data, merges the expression data features with Elist of expression data,
+# verifies log transformation, and performs RMA background correction and quantile normalization
 #
 # Used by load_affy to load an eset for each GPL platform in a GSE.
 #
@@ -132,16 +120,14 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
 # @return Annotated eset with scan_date in pData slot.
 
 load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
-  require(affxparser)
-  require(affy)
-  require(Biobase)
-  require(oligo)
-  require(stringr)
+  require(affxparser, quietly = TRUE)
+  require(affy, quietly = TRUE)
+  require(Biobase, quietly = TRUE)
+  require(oligo, quietly = TRUE)
+  require(stringr, quietly = TRUE)
   
-  # label missing feature data as 'NA'
-  try(Biobase::fData(eset)[Biobase::fData(eset) == ""] <- NA)
-  
-  # convert vars to character vectors
+  # label missing feature data as 'NA' + convert vars to character vectors
+  # try(Biobase::fData(eset[[1]])[Biobase::fData(eset[[1]]) == ""] <- NA)
   try(Biobase::fData(eset)[] <- lapply(Biobase::fData(eset), as.character))
   
   # retrieve sample names and corresponding cel files
@@ -150,38 +136,18 @@ load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
   
   # get full path for all cel files
   cel_paths <- tryCatch(
-    list.files(
-      gse_dir,
-      pattern,
-      full.names = TRUE, #sorts files alphabetically
-      ignore.case = TRUE
-    ),
+    list.files(gse_dir, pattern, full.names = TRUE, ignore.case = TRUE),
     
     # list.files fails if too many files
     error = function(c) {
       n <- length(sample_names)
-      p1 <- paste(sample_names[1:(n / 2)],
-                  ".*CEL$",
-                  collapse = "|",
-                  sep = "")
-      
-      p2 <- paste(sample_names[(n / 2 + 1):n],
-                  ".*CEL$",
-                  collapse = "|",
-                  sep = "")
-      
-      pth1 <- list.files(gse_dir,
-                         p1,
-                         full.names = TRUE,
-                         ignore.case = TRUE)
-      pth2 <- list.files(gse_dir,
-                         p2,
-                         full.names = TRUE,
-                         ignore.case = TRUE)
+      p1 <- paste(sample_names[1:(n / 2)], ".*CEL$", collapse = "|", sep = "")
+      p2 <- paste(sample_names[(n / 2 + 1):n], ".*CEL$", collapse = "|", sep = "")
+      pth1 <- list.files(gse_dir, p1, full.names = TRUE, ignore.case = TRUE)
+      pth2 <- list.files(gse_dir, p2, full.names = TRUE, ignore.case = TRUE)
       
       return(c(pth1, pth2))
-    }
-  )
+    })
   
   # if multiple files with same GSM, take first that occurs
   gsm_names  <- stringr::str_extract(cel_paths, "GSM[0-9]+")
@@ -213,7 +179,6 @@ load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
       cel_paths <- cel_paths[!grepl(corrupted, cel_paths)]
       raw_abatch  <- affy::ReadAffy(filenames = cel_paths)
       return(affy::rma(raw_abatch))
-      
     } else {
       raw_abatch <- tryCatch(
         oligo::read.celfiles(cel_paths),
