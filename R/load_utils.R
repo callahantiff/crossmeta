@@ -32,6 +32,7 @@ source("~/Dropbox/GraduateSchool/PhD/LabWork/MetaOmic/transcriptomic/R/crossmeta
 get_raw <- function (gse_names, data_dir = getwd()) {
   
   for (gse_name in gse_names) {
+    cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Downloading Data:", gse_name, strrep("#", 5), "\n")
     # check if directory to download GSE data to exists - if not, create it
     if (!file.exists(data_dir)) {
       dir.create(data_dir)
@@ -92,7 +93,7 @@ load_raw <- function(gse_names, data_dir = getwd(), gpl_dir = '..', overwrite = 
   affy_names  <- c()
   agil_names  <- c()
   illum_names <- c()
-  nible_names <- c()
+  # nible_names <- c()
   
   # create additional lists to processing metadata
   errors <- c()
@@ -103,17 +104,17 @@ load_raw <- function(gse_names, data_dir = getwd(), gpl_dir = '..', overwrite = 
     save_name <- paste(gse_name, "eset.rds", sep = "_")
     eset_path <- list.files(gse_dir, save_name, full.names = TRUE)
     
-    # check if saved copy
-    if (length(eset_path) > 0 & overwrite == FALSE) {
-      saved[[gse_name]] <- readRDS(eset_path)
-      next()
-    }
-    
+    # # check if saved copy
+    # if (length(eset_path) > 0 & overwrite == FALSE) {
+    #   saved[[gse_name]] <- readRDS(eset_path)
+    #   next()
+    # }
+
     # determine platform (based on filenames)
     affy   <- list.files(gse_dir, ".CEL$", ignore.case = TRUE)
     agil   <- list.files(gse_dir, "^GSM.*txt$", ignore.case = TRUE)
     illum  <- list.files(gse_dir, "non.*norm.*txt$|raw.*txt$|nonorm.*txt$", ignore.case = TRUE)
-    nimble <- list.files(gse_dir, ".pair$", ignore.case = TRUE)
+    # nimble <- list.files(gse_dir, ".pair$", ignore.case = TRUE)
     # abi <- illum <- list.files(gse_dir, "non.*norm.*txt$|raw.*txt$|nonorm.*txt$", ignore.case = TRUE)
     
     # add to appropriate names vector
@@ -123,8 +124,8 @@ load_raw <- function(gse_names, data_dir = getwd(), gpl_dir = '..', overwrite = 
       illum_names <- c(illum_names, gse_name)
     } else if  (length(agil) != 0) {
       agil_names  <- c(agil_names, gse_name)
-    } else if  (length(nimble) != 0) {
-      nimble_names  <- c(nimble_names, gse_name)
+    # } else if  (length(nimble) != 0) {
+    #   nimble_names  <- c(nimble_names, gse_name)
       # } else if  (length(abi) != 0) {
       #   abi_names  <- c(abi_names, gse_name)
       
@@ -139,10 +140,10 @@ load_raw <- function(gse_names, data_dir = getwd(), gpl_dir = '..', overwrite = 
   names(saved) <- eset_names
   
   # load non-saved esets
-  affy  <- load_affy(affy_names, data_dir, gpl_dir, ensql)
-  agil  <- load_agil(agil_names, data_dir, gpl_dir, ensql)
-  illum <- load_illum(illum_names, data_dir, gpl_dir, ensql)
-  nimble <- load_illum(nimble_names, data_dir, gpl_dir, ensql)
+  affy   <- load_affy(affy_names, data_dir, gpl_dir, ensql)
+  agil   <- load_agil(agil_names, data_dir, gpl_dir, ensql)
+  illum  <- load_illum(illum_names, data_dir, gpl_dir, ensql)
+  # nimble <- load_illum(nimble_names, data_dir, gpl_dir, ensql)
   
   # no raw data found
   if (length(errors) > 0) {
@@ -163,10 +164,10 @@ load_raw <- function(gse_names, data_dir = getwd(), gpl_dir = '..', overwrite = 
     message(paste0("Couldn't load raw Illumina data for: ",
                    paste(illum$errors, collapse=", ")))
   }
-  if (length(nimbe$errors) > 0) {
-    message(paste0("Couldn't load raw NimbleGen data for: ",
-                   paste(nimble$errors, collapse=", ")))
-  }
+  # if (length(nimbe$errors) > 0) {
+  #   message(paste0("Couldn't load raw NimbleGen data for: ",
+  #                  paste(nimble$errors, collapse=", ")))
+  # }
   # 
   # if (length(abi$errors) > 0) {
   #   message(paste0("Couldn't load raw ABI data for: ",
@@ -266,8 +267,10 @@ get_biocpack_name <- function (gpl_name) {
 
 symbol_annot <- function (eset, gse_name = "", ensql = NULL) {
   require(Biobase, quietly = TRUE)
+  load("~/Dropbox/GraduateSchool/PhD/LabWork/MetaOmic/transcriptomic/R/crossmeta/R/sysdata.rda")
+  source("~/Dropbox/GraduateSchool/PhD/LabWork/MetaOmic/transcriptomic/R/crossmeta/data-raw/species/org_taxid.R")
   
-  cat("Annotating")
+  cat("Annotating", "\n")
   
   # get map from features to organism entrez ids and symbols
   map <- entrez_map(eset, ensql)
@@ -289,7 +292,7 @@ symbol_annot <- function (eset, gse_name = "", ensql = NULL) {
   
   # merge map and exprs
   PROBE <- Biobase::featureNames(eset)
-  dt <- data.table(exprs(eset), PROBE, key='PROBE')
+  dt <- data.table(Biobase::exprs(eset), PROBE, key='PROBE')
   dt <- merge(unique(dt), map, by = 'PROBE', all.x=TRUE, sort=FALSE)
   dt <- data.frame(dt, row.names = make.unique(dt$PROBE))
   
@@ -302,8 +305,7 @@ symbol_annot <- function (eset, gse_name = "", ensql = NULL) {
 }
 
 
-#################################################
-#################################################
+# ----
 # Get map from eset features to entrez id.
 #
 #
@@ -340,7 +342,7 @@ entrez_map <- function(eset, ensql) {
       
       if (max(matches) > 0.5) {
         # map from feature names to best to entrezid
-        idmap  <- data.table(PROBE, Biobase::fData(eset)[, best])
+        idmap <- data.table(PROBE, Biobase::fData(eset)[, best])
         colnames(idmap) <- c('PROBE', 'PROBEID')
         
         # get entrezid map and merge
@@ -363,7 +365,6 @@ entrez_map <- function(eset, ensql) {
   
   # fraction of probes with entrez ids
   fentrez <- sum(!is.na(map$ENTREZID)) / nrow(map)
-  
   orgpack_exists <- !is.na(org_pkg[org])
   if (orgpack_exists) orgpack <- get_biocpack(org_pkg[org])
   
@@ -409,7 +410,7 @@ entrez_map <- function(eset, ensql) {
         map <- data.frame(PROBE = PROBE[unlist(rn)],
                           ENTREZID = unlist(entrez), stringsAsFactors = FALSE)
       }
-      DBI::dbDisconnect(db)
+      if (length(db) > 1)  DBI::dbDisconnect(db)
     }
   }
   
@@ -431,7 +432,7 @@ entrez_map <- function(eset, ensql) {
       
       # get fraction of fdata column that has a match
       matches <- sapply(fdatacols, function(fdatacol) {
-        sum(Biobase::fData(eset)[, Biobase::fdatacol] %in% orgkeys) / length(PROBE)
+        sum(Biobase::fData(eset)[, fdatacol] %in% orgkeys) / length(PROBE)
       })
       
       # update best
@@ -484,8 +485,7 @@ entrez_map <- function(eset, ensql) {
 }
 
 
-#################################################
-#################################################
+# ----
 # Get eset names for load_affy and load_agil.
 #
 # Helper function to get around issue of a single GSE having multiple platforms
@@ -519,14 +519,20 @@ get_eset_names <- function(esets, gse_names) {
 
 
 #################################################
+############## GEO QUERY FUNCTIONS ##############
 #################################################
-# GEOquery functions ----
+# ----
 getGEO <- function(GEO=NULL,
                    filename=NULL,
                    destdir=tempdir(),
-                   GSElimits=NULL,GSEMatrix=TRUE,
+                   GSElimits=NULL,
+                   GSEMatrix=TRUE,
                    AnnotGPL=FALSE,
                    getGPL=TRUE) {
+  
+  ## function retrieves GEO raw data
+  require(GEOquery, quietly = TRUE)
+  
   con <- NULL
   if(!is.null(GSElimits)) {
     if(length(GSElimits)!=2) {
@@ -540,27 +546,28 @@ getGEO <- function(GEO=NULL,
     GEO <- toupper(GEO)
     geotype <- toupper(substr(GEO,1,3))
     if(GSEMatrix & geotype=='GSE') {
-      return(getAndParseGSEMatrices(GEO,destdir,AnnotGPL=AnnotGPL,getGPL=getGPL))
+      return(getAndParseGSEMatrices(GEO, destdir, AnnotGPL=AnnotGPL, getGPL=getGPL))
     }
-    filename <- GEOquery::getGEOfile(GEO,destdir=destdir,AnnotGPL=AnnotGPL)
+    filename <- GEOquery::getGEOfile(GEO, destdir=destdir, AnnotGPL=AnnotGPL)
   }
-  ret <- GEOquery:::parseGEO(filename,GSElimits,destdir,AnnotGPL=AnnotGPL,getGPL=getGPL)
+  ret <- GEOquery:::parseGEO(filename, GSElimits, destdir, AnnotGPL=AnnotGPL, getGPL=getGPL)
   return(ret)
 }
 
-
+# ----
 getAndParseGSEMatrices <- function(GEO, destdir, AnnotGPL, getGPL=TRUE) {
+  require(GEOquery, quietly = TRUE)
+  
   GEO <- toupper(GEO)
-  ## This stuff functions to get the listing of available files
-  ## for a given GSE given that there may be many GSEMatrix
+  ## function gets the listing of available files for a given GSE, given that there may be many GSEMatrix
   ## files for a given GSE.
   stub = gsub('\\d{1,3}$','nnn',GEO,perl=TRUE)
   gdsurl <- 'https://ftp.ncbi.nlm.nih.gov/geo/series/%s/%s/matrix/'
-  b = crossmeta:::getDirListing(sprintf(gdsurl,stub,GEO))
+  b = getDirListing(sprintf(gdsurl,stub,GEO))
   message(sprintf('Found %d file(s)',length(b)))
   ret <- list()
-  ## Loop over the files, returning a list, one element
-  ## for each file
+  
+  # loop over the files, returning a list, one element for each file
   for(i in 1:length(b)) {
     message(b[i])
     destfile=list.files(destdir, gsub('.gz$', '', b[i]), full.names = TRUE)[1]
@@ -568,16 +575,16 @@ getAndParseGSEMatrices <- function(GEO, destdir, AnnotGPL, getGPL=TRUE) {
       message(sprintf('Using locally cached version: %s',destfile))
     } else {
       destfile=file.path(destdir,b[i])
-      download.file(sprintf('https://ftp.ncbi.nlm.nih.gov/geo/series/%s/%s/matrix/%s',
-                            stub,GEO,b[i]),destfile=destfile,mode='wb',
+      download.file(sprintf('https://ftp.ncbi.nlm.nih.gov/geo/series/%s/%s/matrix/%s', stub,GEO,b[i]), 
+                    destfile=destfile,mode='wb',
                     method=getOption('download.file.method.GEOquery'))
     }
-    ret[[b[i]]] <- GEOquery:::parseGSEMatrix(destfile,destdir=destdir,AnnotGPL=AnnotGPL,getGPL=getGPL)$eset
+    ret[[b[i]]] <- GEOquery:::parseGSEMatrix(destfile, destdir=destdir, AnnotGPL=AnnotGPL, getGPL=getGPL)$eset
   }
   return(ret)
 }
 
-
+# ----
 getGEOSuppFiles <- function(GEO,makeDirectory=TRUE,baseDir=getwd()) {
   geotype <- toupper(substr(GEO,1,3))
   storedir <- baseDir
@@ -592,7 +599,7 @@ getGEOSuppFiles <- function(GEO,makeDirectory=TRUE,baseDir=getwd()) {
   if(geotype=='GPL') {
     url <- sprintf("https://ftp.ncbi.nlm.nih.gov/geo/platform/%s/%s/suppl/",stub,GEO)
   }
-  fnames <- try(crossmeta:::getDirListing(url),silent=TRUE)
+  fnames <- try(getDirListing(url),silent=TRUE)
   if(inherits(fnames,'try-error')) {
     message('No supplemental files found.')
     message('Check URL manually if in doubt')
@@ -612,7 +619,7 @@ getGEOSuppFiles <- function(GEO,makeDirectory=TRUE,baseDir=getwd()) {
   invisible(do.call(rbind,fileinfo))
 }
 
-
+# ----
 getDirListing <- function(url) {
   message(url)
   # Takes a URL and returns a character vector of filenames
