@@ -32,11 +32,11 @@ load_agil <- function (gse_names, data_dir, gpl_dir, ensql) {
         save_name <- paste(gse_name, "eset.rds", sep = "_")
         
         ## check for raw data files
-        # ensure that we have non-normaliezed data
+        # ensure that we have non-normalized data
         file_paths <- list.files(gse_dir, "*[^matrix].txt", full.names = TRUE, ignore.case = TRUE)
         if (length(file_paths) < 2) stop(cat(gse_name, ': no raw data provided.'))
 
-        # get GSEMatrix (for pheno dat)
+        # get GSEMatrix (for pheno data)
         eset <- NULL
         while (is.null(eset)) {
           eset <- try(suppressWarnings(getGEO(gse_name, destdir = gse_dir, GSEMatrix = TRUE, getGPL = FALSE)))
@@ -44,7 +44,7 @@ load_agil <- function (gse_names, data_dir, gpl_dir, ensql) {
 
         # check if have GPL
         cat(strrep("#", 5), "Downloading Annotation Files", strrep("#", 5), "\n")
-        gpl_names <- paste0(sapply(eset, annotation), '.soft', collapse = "|")
+        gpl_names <- paste0(sapply(eset, Biobase::annotation), '.soft', collapse = "|")
         gpl_paths <- sapply(gpl_names, function(gpl_name) {
             list.files(gpl_dir, gpl_name, full.names = TRUE, recursive = TRUE, include.dirs = TRUE)[1]})
 
@@ -110,9 +110,24 @@ load_agil_plat <- function (eset, ch, gse_dir, gse_name, ensql) {
     require(limma, quietly = TRUE)
     require(Biobase, quietly = TRUE)
     require(stringr, quietly = TRUE)
+    require(arrayQualityMetrics, quietly = TRUE)
 
     # try(Biobase::fData(eset)[Biobase::fData(eset) == ""] <- NA)
     try(Biobase::fData(eset)[] <- lapply(Biobase::fData(eset), as.character))
+  
+    # define groups
+    groups = grep("characteristics", names(Biobase::pData(eset)), value=TRUE)
+    # study_name = ifelse(is.null(names(eset)), gse_name, names(eset))
+    study_name = paste(gse_name, eset[1]@annotation, sep = "_")
+  
+    # # Quality control pre-processing
+    # cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Quality Assessment: Pre-Processing", study_name, strrep("#", 5), "\n")
+    # arrayQualityMetrics(expressionset = eset,
+    #                     outdir = paste(gse_dir, "/QualityControl/", study_name, "_QualityControl_Report_Pre", sep = ""),
+    #                     reporttitle = as.character(paste(study_name, "Pre-Processing Quality Control Report")),
+    #                     intgroup = c(groups, "geo_accession"),
+    #                     do.logtransform = TRUE,
+    #                     force = TRUE)
 
     # get paths to raw files for samples in eset
     pattern <- paste(sampleNames(eset), ".*txt", collapse = "|", sep = "")
@@ -193,9 +208,19 @@ load_agil_plat <- function (eset, ch, gse_dir, gse_name, ensql) {
                             featureData = as(elist$genes, 'AnnotatedDataFrame'),
                             annotation = Biobase::annotation(eset))
     }
-
+    
     # add SYMBOL annotation
     eset <- symbol_annot(eset, gse_name, ensql)
+
+    # Quality control post-processing
+    cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Quality Assessment: Post-Processing", study_name, strrep("#", 5), "\n")
+    arrayQualityMetrics(expressionset = eset,
+                        outdir = paste(gse_dir, "/QualityControl/", study_name, "_QualityControl_Report_Post", sep = ""),
+                        reporttitle = as.character(paste(study_name, "Post-Processing Quality Control Report")),
+                        intgroup = c(groups, "geo_accession"),
+                        do.logtransform = FALSE,
+                        force = TRUE)
+  
     return(eset)
 }
 

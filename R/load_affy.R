@@ -4,6 +4,7 @@
 ### date: 03.20.18
 #########################################################################################
 
+
 # ----
 # Extract scan date from Affymetrix CEL file.
 #
@@ -44,6 +45,7 @@ cel_dates <- function(cel_paths) {
 # @return List of annotated esets (one for each unique GSE/GPL platform).
 
 load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
+  require(Biobase, quietly = TRUE)
   esets  <- list()
   errors <- c()
   
@@ -60,11 +62,11 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
     
     # check if have GPL
     cat(strrep("#", 5), "Downloading Annotation Files", strrep("#", 5), "\n")
-    gpl_names <- paste0(sapply(eset, annotation), '.soft', collapse = "|")
+    gpl_names <- paste0(sapply(eset, Biobase::annotation), '.soft', collapse = "|")
     gpl_paths <- sapply(gpl_names, function(gpl_name) {
       list.files(gpl_dir, gpl_name, full.names = TRUE, recursive = TRUE, include.dirs = TRUE)[1]
     })
-    
+
     # copy over GPL
     if (length(gpl_paths) > 0) file.copy(gpl_paths, gse_dir)
     
@@ -120,15 +122,30 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
 # @return Annotated eset with scan_date in pData slot.
 
 load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
+  require(arrayQualityMetrics, quietly = TRUE)
   require(affxparser, quietly = TRUE)
   require(affy, quietly = TRUE)
   require(Biobase, quietly = TRUE)
   require(oligo, quietly = TRUE)
   require(stringr, quietly = TRUE)
-  
+
   # label missing feature data as 'NA' + convert vars to character vectors
   # try(Biobase::fData(eset[[1]])[Biobase::fData(eset[[1]]) == ""] <- NA)
   try(Biobase::fData(eset)[] <- lapply(Biobase::fData(eset), as.character))
+  
+  # define groups
+  groups = grep("characteristics", names(Biobase::pData(eset)), value=TRUE)
+  # study_name = ifelse(is.null(names(eset)), gse_name, names(eset))
+  study_name = paste(gse_name, eset[1]@annotation, sep = "_")
+# 
+#   # Quality control pre-processing
+#   cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Quality Assessment: Pre-Processing", study_name, strrep("#", 5), "\n")
+#   arrayQualityMetrics(expressionset = eset,
+#                       outdir = paste(gse_dir, "/QualityControl/", study_name, "_QualityControl_Report_Pre", sep = ""),
+#                       reporttitle = as.character(paste(study_name, "Pre-Processing Quality Control Report")),
+#                       intgroup = c(groups, "geo_accession"),
+#                       do.logtransform = TRUE,
+#                       force = TRUE)
   
   # retrieve sample names and corresponding cel files
   sample_names <- sampleNames(eset)
@@ -153,24 +170,23 @@ load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
   gsm_names  <- stringr::str_extract(cel_paths, "GSM[0-9]+")
   cel_paths <- cel_paths[!duplicated(gsm_names)]
   
-  # read in cel files, perform rma background correction, quantile normalization, and calculate expression
+  # read in cel files, perform rma background correction, quantile normalization, and calculates expression
   abatch <- tryCatch ({
     raw_abatch <- affy::ReadAffy(filenames = cel_paths)
-    affy::rma(raw_abatch)
+    affy::rma(raw_abatch, background = TRUE, normalize = TRUE)
   },
   
   warning = function(c) {
     # is the warning to use oligo/xps?
     if (grepl("oligo", c$message)) {
       raw_abatch <- oligo::read.celfiles(cel_paths)
-      return(oligo::rma(raw_abatch))
+      return(oligo::rma(raw_abatch, oligo::rma, normalize = TRUE))
       # if not, use affy
     } else {
       raw_abatch <- affy::ReadAffy(filenames = cel_paths)
-      return(affy::rma(raw_abatch))
+      return(affy::rma(raw_abatch, background = TRUE, normalize = TRUE))
     }
   },
-  
   error = function(c) {
     # is the error a corrupted CEL?
     if (grepl('corrupted', c$message)) {
@@ -178,7 +194,7 @@ load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
       corrupted <- stringr::str_extract(c$message, 'GSM\\d+')
       cel_paths <- cel_paths[!grepl(corrupted, cel_paths)]
       raw_abatch  <- affy::ReadAffy(filenames = cel_paths)
-      return(affy::rma(raw_abatch))
+      return(affy::rma(raw_abatch, background = TRUE, normalize = TRUE))
     } else {
       raw_abatch <- tryCatch(
         oligo::read.celfiles(cel_paths),
@@ -189,9 +205,8 @@ load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
             return(oligo::read.celfiles(cel_paths, pkgname = 'pd.hugene.2.0.st'))
           if (grepl('pd.mogene.2.0.st.v1', d$message))
             return(oligo::read.celfiles(cel_paths, pkgname = 'pd.mogene.2.0.st'))
-        }
-      )
-      return (oligo::rma(raw_abatch))
+        })
+      return (oligo::rma(raw_abatch, background = TRUE, normalize = TRUE))
     }
   })
   
@@ -210,7 +225,17 @@ load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
   # add SYMBOL annotation
   eset <- symbol_annot(eset, gse_name, ensql)
   
+  # Quality control post-processing
+  cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Quality Assessment: Post-Processing", study_name, strrep("#", 5), "\n")
+  arrayQualityMetrics(expressionset = eset,
+                      outdir = paste(gse_dir, "/QualityControl/", study_name, "_QualityControl_Report", sep = ""),
+                      reporttitle = as.character(paste(study_name, "Post-Processing Quality Control Report")),
+                      intgroup = c(groups, "geo_accession"),
+                      do.logtransform = FALSE,
+                      force = TRUE)
+  
   return(eset)
+  
 }
 
 # ----

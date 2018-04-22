@@ -7,6 +7,7 @@
 # load needed scripts, can remove this again once we have packaged the code
 source("~/Dropbox/GraduateSchool/PhD/LabWork/MetaOmic/transcriptomic/R/crossmeta/R/illum_headers.R")
 
+
 # ----
 # Load and pre-process raw Illum files.
 #
@@ -25,6 +26,7 @@ source("~/Dropbox/GraduateSchool/PhD/LabWork/MetaOmic/transcriptomic/R/crossmeta
 # @return List of annotated esets.
 
 load_illum <- function (gse_names, data_dir, gpl_dir, ensql) {
+  require(Biobase, quietly = TRUE)
     esets  <- list()
     errors <- c()
     
@@ -41,7 +43,7 @@ load_illum <- function (gse_names, data_dir, gpl_dir, ensql) {
         
         # check if have GPL
         cat(strrep("#", 5), "Downloading Annotation Files", strrep("#", 5), "\n")
-        gpl_names <- paste0(sapply(eset, annotation), '.soft', collapse = "|")
+        gpl_names <- paste0(sapply(eset, Biobase::annotation), '.soft', collapse = "|")
         gpl_paths <- sapply(gpl_names, function(gpl_name) {
           list.files(gpl_dir, gpl_name, full.names = TRUE, recursive = TRUE, include.dirs = TRUE)[1]
         })
@@ -104,9 +106,14 @@ load_illum <- function (gse_names, data_dir, gpl_dir, ensql) {
 load_illum_plat <- function(eset, gse_dir, gse_name, ensql) {
     require(Biobase, quietly = TRUE)
     require(limma, quietly = TRUE)
+    require(arrayQualityMetrics, quietly = TRUE)
 
     # try(Biobase::fData(eset)[Biobase::fData(eset) == ""] <- NA)
     try(Biobase::fData(eset)[] <- lapply(Biobase::fData(eset), as.character))
+  
+    # define groups - needed for checking post-processing array quality
+    groups = grep("characteristics", names(Biobase::pData(eset)), value=TRUE)
+    study_name = paste(gse_name, eset[1]@annotation, sep = "_")
 
     # fix header issues
     elist_paths <- list.files(gse_dir, pattern = "non.*norm.*txt$|raw.*txt$|nonorm.*txt$", full.names = TRUE, ignore.case = TRUE)
@@ -125,7 +132,7 @@ load_illum_plat <- function(eset, gse_dir, gse_name, ensql) {
     # load fixed elist paths
     elist_paths <- gsub(".txt", "_fixed.txt", elist_paths, fixed = TRUE)
     elist <- limma::read.ilmn(elist_paths, probeid = "ID_REF", annotation = annotation)
-
+    
     # don't correct if already log transformed (already corrected?)
     logd <- max(elist$E, na.rm = TRUE) < 100
     if (!logd) {
@@ -171,9 +178,19 @@ load_illum_plat <- function(eset, gse_dir, gse_name, ensql) {
                           phenoData = Biobase::phenoData(eset),
                           featureData = as(elist$genes, 'AnnotatedDataFrame'),
                           annotation = Biobase::annotation(eset))
-
-    # add SYMBOL annotation
+    
+    # # add SYMBOL annotation
     eset <- symbol_annot(eset, gse_name, ensql)
+    
+    # quality control post-processing
+    cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Quality Assessment: Post-Processing", study_name, strrep("#", 5), "\n")
+    arrayQualityMetrics(expressionset = eset,
+                        outdir = paste(gse_dir, "/QualityControl/", study_name, "_QualityControl_Report", sep = ""),
+                        reporttitle = as.character(paste(study_name, "Post-Processing Quality Control Report")),
+                        intgroup = c(groups, "geo_accession"),
+                        do.logtransform = FALSE,
+                        force = TRUE)
+
     return(eset)
 }
 
