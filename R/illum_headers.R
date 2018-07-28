@@ -68,6 +68,18 @@ fix_illum_headers <- function(elist_paths, eset = NULL) {
         ex <- data.table::fread(fpath, sep = '\t', skip = 0, header = TRUE, fill = TRUE)
         # ex <- data.table::fread(fpath, sep = '\t', skip = 0, header = TRUE, nrows = 1000, fill = TRUE)
         ex <- as.data.frame(ex)
+        
+        
+        for(x in 1:length(names(ex))) {
+          match = grep(" Pval", colnames(ex)[x])
+          
+          if(length(match) == 0 & x != "ID_REF") {
+            colnames(ex)[x] <- paste(colnames(ex)[x], "signal")
+          }
+          else {
+            colnames(ex)[x] = colnames(ex)[x]
+          }
+        }
 
         ## fix annotation columns ----
         # look for column with ILMN entries

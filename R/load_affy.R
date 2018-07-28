@@ -48,6 +48,17 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
   require(Biobase, quietly = TRUE)
   esets  <- list()
   errors <- c()
+  gse_meta <- data.frame(study = character(),
+                         platform = character(),
+                         channels = character(),
+                         data_type = character(),
+                         sample_number = numeric(),
+                         samples = character(),
+                         annotation_package = character(),
+                         num_probe = numeric(),
+                         num_annotated_probes_all = numeric(),
+                         num_annotated_probes_unique = numeric(),
+                         stringsAsFactors = FALSE)
   
   for (gse_name in gse_names) {
     cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Processing AFFY:", gse_name, strrep("#", 5), "\n")
@@ -78,7 +89,7 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
     
     # name esets
     if (length(eset) > 1) {
-      names(eset) <- paste(gse_name, sapply(eset, annotation), sep = '.')
+      names(eset) <- paste(gse_name, sapply(eset, Biobase::annotation), sep = '.')
     } else {
       names(eset) <- gse_name
     }
@@ -91,20 +102,55 @@ load_affy <- function (gse_names, data_dir, gpl_dir, ensql) {
         error = function(e)
           NA)
     })
-    
-    # save to disc
-    if (!all(is.na(eset))) saveRDS(eset[!is.na(eset)], file.path(gse_dir, save_name))
-    
-    # if there are any NAs save information to error list
+
+      # save to disc
+      # if (!all(is.na(eset))) saveRDS(eset[!is.na(eset)], file.path(gse_dir, save_name))
+      
     if (anyNA(eset))
       errors <- c(errors, names(eset[is.na(eset)]))
-    if (!all(is.na(eset)))
-      esets[[gse_name]] <- eset[!is.na(eset)]
+    
+    if (!all(is.na(eset))) {
+      # esets[[gse_name]] <- eset[!is.na(eset)]
+      saveRDS(eset[!is.na(eset)], file.path(gse_dir, save_name))
+      
+      if (length(eset) > 1) {
+        for(i in 1:length(eset)) {
+          esets[[names(eset[i])]] <- eset[i][!is.na(eset[i])]
+        }
+      }
+      if (length(eset) == 1) {
+        esets[[gse_name]] <- eset[!is.na(eset)]
+      }
+    }
+  }
+  
+  # compile metadata
+  cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Compiling Study Metadata", strrep("#", 5), "\n")
+  for(i in 1:length(esets)){
+    if (length(esets[[i]]) > 0) {
+      res = esets[[i]]
+      gse_meta[i, "study"] = names(res)
+      gse_meta[i, "platform"] = gpl_bioc[which(rownames(gpl_bioc) == Biobase::annotation(res[[1]])),]$title
+      gse_meta[i, "channels"] = "one"
+      gse_meta[i, "data_type"] = ifelse(length(grep(".*CEL*", phenoData(res[[1]])$supplementary_file)) == length(sampleNames(res)), 
+                                        "Raw Microarray Data",
+                                        ifelse(length(grep("*non_normalized", phenoData(res[[1]])$supplementary_file)) > 0,
+                                               "Non-Normalized Gene Expression Matrix",
+                                               "Normalized Gene Expression Matrix"))
+      gse_meta[i, "sample_number"] = length(sampleNames(res))
+      gse_meta[i, "samples"] = paste(unlist(sampleNames(res)), collapse=',')
+      gse_meta[i, "annotation_package"] = ifelse(gpl_bioc[which(rownames(gpl_bioc) == Biobase::annotation(res[[1]])),]$bioc_package == "",
+                                                 "AnnotationDbi::species(biocpack)",
+                                                 gpl_bioc[which(rownames(gpl_bioc) == Biobase::annotation(res[[1]])),]$bioc_package)
+      gse_meta[i, "num_probe"] = length(fData(res[[1]])$PROBE)
+      gse_meta[i, "num_annotated_probes_all"] = length(na.omit(fData(res[[1]])$ENTREZID))
+      gse_meta[i, "num_annotated_probes_unique"] = length(unique(na.omit(fData(res[[1]])$ENTREZID)))
+    }
   }
   eset_names <- get_eset_names(esets, gse_names)
   esets <- unlist(esets)
   names(esets) <- eset_names
-  return (list(esets = esets, errors = errors))
+  return (list(esets = esets, errors = errors, metadata = gse_meta))
 }
 
 # ----
@@ -137,18 +183,9 @@ load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
   groups = grep("characteristics", names(Biobase::pData(eset)), value=TRUE)
   # study_name = ifelse(is.null(names(eset)), gse_name, names(eset))
   study_name = paste(gse_name, eset[1]@annotation, sep = "_")
-# 
-#   # Quality control pre-processing
-#   cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Quality Assessment: Pre-Processing", study_name, strrep("#", 5), "\n")
-#   arrayQualityMetrics(expressionset = eset,
-#                       outdir = paste(gse_dir, "/QualityControl/", study_name, "_QualityControl_Report_Pre", sep = ""),
-#                       reporttitle = as.character(paste(study_name, "Pre-Processing Quality Control Report")),
-#                       intgroup = c(groups, "geo_accession"),
-#                       do.logtransform = TRUE,
-#                       force = TRUE)
-  
+
   # retrieve sample names and corresponding cel files
-  sample_names <- sampleNames(eset)
+  sample_names <- Biobase::sampleNames(eset)
   pattern <- paste(sample_names, ".*CEL$", collapse = "|", sep = "")
   
   # get full path for all cel files
@@ -228,7 +265,7 @@ load_affy_plat <- function(eset, gse_dir, gse_name, ensql) {
   # Quality control post-processing
   cat("\n\n", strrep("#",100), "\n", strrep("#", 5), "Quality Assessment: Post-Processing", study_name, strrep("#", 5), "\n")
   arrayQualityMetrics(expressionset = eset,
-                      outdir = paste(gse_dir, "/QualityControl/", study_name, "_QualityControl_Report", sep = ""),
+                      outdir = paste(gse_dir, "/QualityControl/", study_name, "_QualityControlReport", sep = ""),
                       reporttitle = as.character(paste(study_name, "Post-Processing Quality Control Report")),
                       intgroup = c(groups, "geo_accession"),
                       do.logtransform = FALSE,
